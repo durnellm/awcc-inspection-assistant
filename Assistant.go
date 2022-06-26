@@ -257,10 +257,11 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 			body, _, _ = strings.Cut(body, "[/spoiler]")
 		}
 	}
-	cutbody := strings.Split(body, "url=https://myanimelist.net/anime")
+	cutbody := strings.Split(body, "://myanimelist.net/anime")
 	for i := 1; i < len(cutbody); i++ {
 		var tempid, temptitle string
-		if strings.Contains(cutbody[i], ".php?id=") {
+		var tempEparse EntryParse
+		if strings.Contains(cutbody[i][:10], ".php?id=") {
 			tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
 			tempid, temptitle, _ = strings.Cut(tempcut, "]")
 		} else if strings.Contains(cutbody[i][1:10], "/") {
@@ -271,10 +272,11 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
 			tempid, temptitle, _ = strings.Cut(tempcut, "]")
 		}
-		var tempEparse EntryParse
-		tempEparse.id = tempid
-		tempEparse.title = temptitle
-		parselist = append(parselist, tempEparse)
+		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
+			tempEparse.id = tempid
+			tempEparse.title = temptitle
+			parselist = append(parselist, tempEparse)
+		}
 	}
 	return
 }
@@ -307,16 +309,22 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 	}
 
 	var temp Forums
+	var comp Forums
+	var comps []Forums
 
 	err = json.Unmarshal(byteValue, &temp)
 
 	if err != nil {
 		fmt.Println(err)
 	}
-	var comp []Forums
+	
 	if len(CompIds) > 0 {
+
 		for i := 0; i < len(CompIds); i++ {
 			client := http.Client{}
+			if CompIds[i] == 0{
+				break
+			}
 			req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(CompIds[i])+"?offset="+strconv.Itoa(CompNums[i]-1)+"&limit=1", nil)
 			if err != nil {
 				fmt.Println(err)
@@ -347,29 +355,54 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 			if err != nil {
 				fmt.Println(err)
 			}
+			comps = append(comps, comp)
 		}
 	}
 	body := temp.Forum.Posts[0].Body
-	cutbody := strings.Split(body, "url=https://myanimelist.net/anime/")
+	cutbody := strings.Split(body, "://myanimelist.net/anime")
 	for i := 1; i < len(cutbody); i++ {
-		tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
-		tempid, temptitle, _ := strings.Cut(tempcut, "]")
+		var tempid, temptitle string
 		var tempEparse EntryParse
-		tempEparse.id = tempid
-		tempEparse.title = temptitle
-		complist = append(complist, tempEparse)
+		if strings.Contains(cutbody[i][:10], ".php?id=") {
+			tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
+			tempid, temptitle, _ = strings.Cut(tempcut, "]")
+		} else if strings.Contains(cutbody[i][1:10], "/") {
+			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+			tempid, temptitle, _ = strings.Cut(tempcut, "/")
+			_, temptitle, _ = strings.Cut(temptitle, "]")
+		} else {
+			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+			tempid, temptitle, _ = strings.Cut(tempcut, "]")
+		}
+		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
+			tempEparse.id = tempid
+			tempEparse.title = temptitle
+			complist = append(complist, tempEparse)
+		}
 	}
 	if len(CompIds) > 0 {
 		for j := 0; j < len(CompIds); j++ {
-			body := comp[j].Forum.Posts[0].Body
-			cutbody := strings.Split(body, "url=https://myanimelist.net/anime/")
+			body := comps[j].Forum.Posts[0].Body
+			cutbody := strings.Split(body, "://myanimelist.net/anime/")
 			for i := 1; i < len(cutbody); i++ {
-				tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
-				tempid, temptitle, _ := strings.Cut(tempcut, "]")
+				var tempid, temptitle string
 				var tempEparse EntryParse
-				tempEparse.id = tempid
-				tempEparse.title = temptitle
-				complist = append(complist, tempEparse)
+				if strings.Contains(cutbody[i][:10], ".php?id=") {
+					tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
+					tempid, temptitle, _ = strings.Cut(tempcut, "]")
+				} else if strings.Contains(cutbody[i][1:10], "/") {
+					tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+					tempid, temptitle, _ = strings.Cut(tempcut, "/")
+					_, temptitle, _ = strings.Cut(temptitle, "]")
+				} else {
+					tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+					tempid, temptitle, _ = strings.Cut(tempcut, "]")
+				}
+				if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
+					tempEparse.id = tempid
+					tempEparse.title = temptitle
+					complist = append(complist, tempEparse)
+				}
 			}
 		}
 	}
@@ -379,7 +412,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 func Check_dupes(complist []EntryParse) (dupelist []EntryParse) {
 	for i := 0; i < len(complist); i++ {
 		for j := i + 1; j < len(complist); j++ {
-			if complist[i].id == complist[j].id || complist[i].title == complist[j].title {
+			if complist[i].id == complist[j].id{
 				dupelist = append(dupelist, complist[i])
 			}
 		}
@@ -846,7 +879,7 @@ func ForumButtonN(temp *tview.Form) {
 
 	temp.AddInputField("Post Number:", "", 8, nil, func(forumNum2 string) {
 		tempNum, _ := strconv.Atoi(forumNum2)
-		data.CompIds = append(data.CompIds, tempNum)
+		data.CompNums = append(data.CompNums, tempNum)
 	})
 
 }
@@ -857,7 +890,7 @@ func ForumButtonZ() *tview.Form {
 		data.Dupelist = Check_dupes(complist)
 		data.Colorlist = Check_forum(forumlist, data.FilteredList, data.anime)
 		data.CSortedList = Date_sort2(data.Colorlist)
-		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + Postdata.Name + ": " + Postdata.Title + "\nDuplicates:")
+		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + Postdata.Name + ": " + Postdata.Title + " " + data.ForumSpoil+"\nDuplicates:")
 		forumdisplayA.Clear()
 		forumdisplayE.Clear()
 		dupedisplay.Clear()
