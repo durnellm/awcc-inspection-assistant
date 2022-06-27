@@ -325,7 +325,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 			if CompIds[i] == 0 {
 				break
 			}
-			req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(CompIds[i])+"?offset="+strconv.Itoa(CompNums[i+1]-1)+"&limit=1", nil)
+			req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(CompIds[i])+"?offset="+strconv.Itoa(CompNums[i]-1)+"&limit=1", nil)
 			if err != nil {
 				log.Println(err)
 			}
