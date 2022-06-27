@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"sort"
@@ -218,7 +219,7 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(ForumId)+"?offset="+strconv.Itoa(ForumNum-1)+"&limit=1", nil)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	req.Header = http.Header{
@@ -228,7 +229,7 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	resp, err := client.Do(req)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	if resp.Body != nil {
@@ -238,7 +239,7 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	byteValue, err := ioutil.ReadAll(resp.Body)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	var temp Forums
@@ -246,7 +247,7 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	err = json.Unmarshal(byteValue, &temp)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 	body := temp.Forum.Posts[0].Body
 	Postdata.Title = temp.Forum.Title
@@ -272,7 +273,7 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
 			tempid, temptitle, _ = strings.Cut(tempcut, "]")
 		}
-		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
+		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
 			tempEparse.id = tempid
 			tempEparse.title = temptitle
 			parselist = append(parselist, tempEparse)
@@ -285,7 +286,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(ForumId)+"?offset="+strconv.Itoa(ForumNum-1)+"&limit=1", nil)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	req.Header = http.Header{
@@ -295,7 +296,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 	resp, err := client.Do(req)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	if resp.Body != nil {
@@ -305,29 +306,28 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 	byteValue, err := ioutil.ReadAll(resp.Body)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	var temp Forums
-	var comp Forums
 	var comps []Forums
 
 	err = json.Unmarshal(byteValue, &temp)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
-	
-	if len(CompIds) > 0 {
 
+	if len(CompIds) > 0 {
 		for i := 0; i < len(CompIds); i++ {
+			var comp Forums
 			client := http.Client{}
-			if CompIds[i] == 0{
+			if CompIds[i] == 0 {
 				break
 			}
-			req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(CompIds[i])+"?offset="+strconv.Itoa(CompNums[i]-1)+"&limit=1", nil)
+			req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(CompIds[i])+"?offset="+strconv.Itoa(CompNums[i+1]-1)+"&limit=1", nil)
 			if err != nil {
-				fmt.Println(err)
+				log.Println(err)
 			}
 
 			req.Header = http.Header{
@@ -337,7 +337,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 			resp, err := client.Do(req)
 
 			if err != nil {
-				fmt.Println(err)
+				log.Println(err)
 			}
 
 			if resp.Body != nil {
@@ -347,16 +347,17 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 			byteValue, err := ioutil.ReadAll(resp.Body)
 
 			if err != nil {
-				fmt.Println(err)
+				log.Println(err)
 			}
 
 			err = json.Unmarshal(byteValue, &comp)
 
 			if err != nil {
-				fmt.Println(err)
+				log.Println(err)
 			}
 			comps = append(comps, comp)
 		}
+
 	}
 	body := temp.Forum.Posts[0].Body
 	cutbody := strings.Split(body, "://myanimelist.net/anime")
@@ -374,34 +375,36 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
 			tempid, temptitle, _ = strings.Cut(tempcut, "]")
 		}
-		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
+		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
 			tempEparse.id = tempid
 			tempEparse.title = temptitle
 			complist = append(complist, tempEparse)
 		}
 	}
-	if len(CompIds) > 0 {
-		for j := 0; j < len(CompIds); j++ {
-			body := comps[j].Forum.Posts[0].Body
-			cutbody := strings.Split(body, "://myanimelist.net/anime/")
-			for i := 1; i < len(cutbody); i++ {
-				var tempid, temptitle string
-				var tempEparse EntryParse
-				if strings.Contains(cutbody[i][:10], ".php?id=") {
-					tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
-					tempid, temptitle, _ = strings.Cut(tempcut, "]")
-				} else if strings.Contains(cutbody[i][1:10], "/") {
-					tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-					tempid, temptitle, _ = strings.Cut(tempcut, "/")
-					_, temptitle, _ = strings.Cut(temptitle, "]")
-				} else {
-					tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-					tempid, temptitle, _ = strings.Cut(tempcut, "]")
-				}
-				if tempid != "genre" && !(tempid == "199" && temptitle == "recommended"){
-					tempEparse.id = tempid
-					tempEparse.title = temptitle
-					complist = append(complist, tempEparse)
+	if len(comps) > 0 {
+		for j := 0; j < len(comps); j++ {
+			if len(comps[j].Forum.Posts) > 0 {
+				body := comps[j].Forum.Posts[0].Body
+				cutbody := strings.Split(body, "://myanimelist.net/anime/")
+				for i := 1; i < len(cutbody); i++ {
+					var tempid, temptitle string
+					var tempEparse EntryParse
+					if strings.Contains(cutbody[i][:10], ".php?id=") {
+						tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
+						tempid, temptitle, _ = strings.Cut(tempcut, "]")
+					} else if strings.Contains(cutbody[i][1:10], "/") {
+						tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+						tempid, temptitle, _ = strings.Cut(tempcut, "/")
+						_, temptitle, _ = strings.Cut(temptitle, "]")
+					} else {
+						tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
+						tempid, temptitle, _ = strings.Cut(tempcut, "]")
+					}
+					if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
+						tempEparse.id = tempid
+						tempEparse.title = temptitle
+						complist = append(complist, tempEparse)
+					}
 				}
 			}
 		}
@@ -412,7 +415,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 func Check_dupes(complist []EntryParse) (dupelist []EntryParse) {
 	for i := 0; i < len(complist); i++ {
 		for j := i + 1; j < len(complist); j++ {
-			if complist[i].id == complist[j].id{
+			if complist[i].id == complist[j].id {
 				dupelist = append(dupelist, complist[i])
 			}
 		}
@@ -500,7 +503,7 @@ func Get_list(username string) (list []Entry) {
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/users/"+username+"/animelist?status=completed&limit=1000&fields=list_status,media_type&nsfw=true", nil)
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	req.Header = http.Header{
@@ -510,7 +513,7 @@ func Get_list(username string) (list []Entry) {
 	resp, err := client.Do(req)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	if resp.Body != nil {
@@ -520,7 +523,7 @@ func Get_list(username string) (list []Entry) {
 	byteValue, err := ioutil.ReadAll(resp.Body)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	var temp Entries
@@ -528,7 +531,7 @@ func Get_list(username string) (list []Entry) {
 	err = json.Unmarshal(byteValue, &temp)
 
 	if err != nil {
-		fmt.Println(err)
+		log.Println(err)
 	}
 
 	next := temp.Paging.Next
@@ -536,7 +539,7 @@ func Get_list(username string) (list []Entry) {
 	for next != "" {
 		req, err := http.NewRequest("GET", next, nil)
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		}
 
 		req.Header = http.Header{
@@ -546,7 +549,7 @@ func Get_list(username string) (list []Entry) {
 		resp, err := client.Do(req)
 
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		}
 
 		if resp.Body != nil {
@@ -556,7 +559,7 @@ func Get_list(username string) (list []Entry) {
 		byteValue, err = ioutil.ReadAll(resp.Body)
 
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		}
 
 		var temp2 Entries
@@ -564,7 +567,7 @@ func Get_list(username string) (list []Entry) {
 		err = json.Unmarshal(byteValue, &temp2)
 
 		if err != nil {
-			fmt.Println(err)
+			log.Println(err)
 		}
 
 		for i := 0; i < len(temp2.Entry); i++ {
@@ -580,6 +583,7 @@ func Get_list(username string) (list []Entry) {
 }
 
 var SecretKey string
+var CompBoxes []*tview.InputField
 var Once = true
 var FOnce = true
 var app = tview.NewApplication()
@@ -862,6 +866,8 @@ func ForumFilter() *tview.Form {
 
 func ForumButton1() *tview.Form {
 	ForumsAdd.AddButton("Add", func() {
+		data.CompIds = append(data.CompIds, 0)
+		data.CompNums = append(data.CompNums, 0)
 		ForumsComp = append(ForumsComp, tview.NewForm())
 		ForumsFlex.AddItem(ForumsComp[len(ForumsComp)-1], 0, 1, false)
 		ForumButtonN(ForumsComp[len(ForumsComp)-1])
@@ -872,25 +878,32 @@ func ForumButton1() *tview.Form {
 
 func ForumButtonN(temp *tview.Form) {
 	temp.SetHorizontal(true)
-	temp.AddInputField("Forum ID:", strconv.Itoa(data.ForumId), 8, nil, func(forumID2 string) {
-		tempId, _ := strconv.Atoi(forumID2)
-		data.CompIds = append(data.CompIds, tempId)
-	})
 
-	temp.AddInputField("Post Number:", "", 8, nil, func(forumNum2 string) {
-		tempNum, _ := strconv.Atoi(forumNum2)
-		data.CompNums = append(data.CompNums, tempNum)
-	})
+	CompBoxes = append(CompBoxes, tview.NewInputField().
+		SetLabel("Forum ID:").
+		SetFieldWidth(8))
+
+	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
+
+	CompBoxes = append(CompBoxes, tview.NewInputField().
+		SetLabel("Forum Num:").
+		SetFieldWidth(8))
+
+	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
 
 }
 func ForumButtonZ() *tview.Form {
 	ForumsButton.AddButton("Continue", func() {
+		for i := 0; i < len(ForumsComp); i++ {
+			data.CompIds[i], _ = strconv.Atoi(CompBoxes[2*i].GetText())
+			data.CompNums[i], _ = strconv.Atoi(CompBoxes[2*i+1].GetText())
+		}
 		forumlist := Forum_Parse(data.ForumSpoil, data.ForumId, data.ForumNum)
 		complist := Comp_Parse(data.ForumId, data.ForumNum, data.CompIds, data.CompNums)
 		data.Dupelist = Check_dupes(complist)
 		data.Colorlist = Check_forum(forumlist, data.FilteredList, data.anime)
 		data.CSortedList = Date_sort2(data.Colorlist)
-		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + Postdata.Name + ": " + Postdata.Title + " " + data.ForumSpoil+"\nDuplicates:")
+		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + Postdata.Name + ": " + Postdata.Title + " " + data.ForumSpoil + "\nDuplicates:")
 		forumdisplayA.Clear()
 		forumdisplayE.Clear()
 		dupedisplay.Clear()
@@ -996,7 +1009,22 @@ func displaydupes(dupelist []EntryParse) {
 
 func main() {
 
-	err := godotenv.Load()
+	file, err := os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	log.SetFlags(log.Lshortfile)
+
+	log.SetOutput(file)
+
+	defer func() {
+		if err := recover(); err != nil {
+			log.Println(err)
+		}
+	}()
+
+	err = godotenv.Load()
 	if err != nil {
 		fmt.Println("Error loading .env file")
 	}
@@ -1120,7 +1148,7 @@ func main() {
 	pages.AddPage("ForumEnd", ForumA, true, false)
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
-		panic(err)
+		log.Println(err)
 	}
 
 }
