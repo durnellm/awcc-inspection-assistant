@@ -215,7 +215,7 @@ func Type_filter(list []CleanEntry, tv, movie, ova, ona, special, music, unknown
 	return
 }
 
-func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse) {
+func Turnin_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse) {
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(ForumId)+"?offset="+strconv.Itoa(ForumNum-1)+"&limit=1", nil)
 	if err != nil {
@@ -262,18 +262,16 @@ func Forum_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	for i := 1; i < len(cutbody); i++ {
 		var tempid, temptitle string
 		var tempEparse EntryParse
-		if strings.Contains(cutbody[i][:10], ".php?id=") {
-			tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "]")
-		} else if strings.Contains(cutbody[i][1:10], "/") {
-			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "/")
-			_, temptitle, _ = strings.Cut(temptitle, "]")
+		tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
+		tempid, temptitle, _ = strings.Cut(tempcut, "]")
+		if strings.Contains(tempid, ".php?id=") {
+			tempid = tempid[8:]
+		} else if strings.Contains(tempid[1:], "/") {
+			tempid, _, _ = strings.Cut(tempid[1:], "/")
 		} else {
-			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "]")
+			tempid = tempid[1:]
 		}
-		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
+		if tempid != "genre" && tempid != "producer" && !(tempid == "199" && temptitle == "recommended") {
 			tempEparse.id = tempid
 			tempEparse.title = temptitle
 			parselist = append(parselist, tempEparse)
@@ -356,6 +354,7 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 				log.Println(err)
 			}
 			comps = append(comps, comp)
+			log.Println(CompIds[i], CompNums[i])
 		}
 
 	}
@@ -364,18 +363,17 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 	for i := 1; i < len(cutbody); i++ {
 		var tempid, temptitle string
 		var tempEparse EntryParse
-		if strings.Contains(cutbody[i][:10], ".php?id=") {
-			tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "]")
-		} else if strings.Contains(cutbody[i][1:10], "/") {
-			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "/")
-			_, temptitle, _ = strings.Cut(temptitle, "]")
+		tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
+		tempid, temptitle, _ = strings.Cut(tempcut, "]")
+		if strings.Contains(tempid, ".php?id=") {
+			tempid = tempid[8:]
+		} else if strings.Contains(tempid[1:], "/") {
+			tempid, _, _ = strings.Cut(tempid[1:], "/")
 		} else {
-			tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-			tempid, temptitle, _ = strings.Cut(tempcut, "]")
+			tempid = tempid[1:]
 		}
-		if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
+		a, _ := strconv.Atoi(tempid)
+		if tempid != "genre" && tempid != "producer" && temptitle != "Series" && a != 0 && !(a == 199 && temptitle == "recommended") {
 			tempEparse.id = tempid
 			tempEparse.title = temptitle
 			complist = append(complist, tempEparse)
@@ -385,22 +383,21 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 		for j := 0; j < len(comps); j++ {
 			if len(comps[j].Forum.Posts) > 0 {
 				body := comps[j].Forum.Posts[0].Body
-				cutbody := strings.Split(body, "://myanimelist.net/anime/")
+				cutbody := strings.Split(body, "://myanimelist.net/anime")
 				for i := 1; i < len(cutbody); i++ {
 					var tempid, temptitle string
 					var tempEparse EntryParse
-					if strings.Contains(cutbody[i][:10], ".php?id=") {
-						tempcut, _, _ := strings.Cut(cutbody[i][8:], "[/url]")
-						tempid, temptitle, _ = strings.Cut(tempcut, "]")
-					} else if strings.Contains(cutbody[i][1:10], "/") {
-						tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-						tempid, temptitle, _ = strings.Cut(tempcut, "/")
-						_, temptitle, _ = strings.Cut(temptitle, "]")
+					tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
+					tempid, temptitle, _ = strings.Cut(tempcut, "]")
+					if strings.Contains(tempid, ".php?id=") {
+						tempid = tempid[8:]
+					} else if strings.Contains(tempid[1:], "/") {
+						tempid, _, _ = strings.Cut(tempid[1:], "/")
 					} else {
-						tempcut, _, _ := strings.Cut(cutbody[i][1:], "[/url]")
-						tempid, temptitle, _ = strings.Cut(tempcut, "]")
+						tempid = tempid[1:]
 					}
-					if tempid != "genre" && !(tempid == "199" && temptitle == "recommended") {
+					a, _ := strconv.Atoi(tempid)
+					if tempid != "genre" && tempid != "producer" && temptitle != "Series" && a != 0 && !(a == 199 && temptitle == "recommended") {
 						tempEparse.id = tempid
 						tempEparse.title = temptitle
 						complist = append(complist, tempEparse)
@@ -415,7 +412,9 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 func Check_dupes(complist []EntryParse) (dupelist []EntryParse) {
 	for i := 0; i < len(complist); i++ {
 		for j := i + 1; j < len(complist); j++ {
-			if complist[i].id == complist[j].id {
+			a, _ := strconv.Atoi(complist[i].id)
+			b, _ := strconv.Atoi(complist[j].id)
+			if a == b {
 				dupelist = append(dupelist, complist[i])
 			}
 		}
@@ -898,7 +897,7 @@ func ForumButtonZ() *tview.Form {
 			data.CompIds[i], _ = strconv.Atoi(CompBoxes[2*i].GetText())
 			data.CompNums[i], _ = strconv.Atoi(CompBoxes[2*i+1].GetText())
 		}
-		forumlist := Forum_Parse(data.ForumSpoil, data.ForumId, data.ForumNum)
+		forumlist := Turnin_Parse(data.ForumSpoil, data.ForumId, data.ForumNum)
 		complist := Comp_Parse(data.ForumId, data.ForumNum, data.CompIds, data.CompNums)
 		data.Dupelist = Check_dupes(complist)
 		data.Colorlist = Check_forum(forumlist, data.FilteredList, data.anime)
