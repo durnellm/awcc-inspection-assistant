@@ -2,16 +2,17 @@ package main
 
 import (
 	"encoding/json"
-	"fmt"
 	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
-	"sort"
+	"regexp"
 	"strconv"
 	"strings"
 
+	goquery "github.com/PuerkitoBio/goquery"
 	tcell "github.com/gdamore/tcell/v2"
+	colly "github.com/gocolly/colly"
 	godotenv "github.com/joho/godotenv"
 	tview "github.com/rivo/tview"
 )
@@ -71,6 +72,8 @@ type Node struct {
 	Title        string       `json:"title"`
 	Main_picture Main_picture `json:"main_picture"`
 	Media        string       `json:"media_type"`
+	NumEpisodes  int          `json:"num_episodes"`
+	AvgDuration  int          `json:"average_episode_duration"`
 }
 
 type Main_picture struct {
@@ -89,11 +92,18 @@ type List_status struct {
 }
 
 type CleanEntry struct {
-	id        string
-	title     string
-	startdate string
-	enddate   string
-	maltype   string
+	id          string
+	title       string
+	startdate   string
+	enddate     string
+	maltype     string
+	numepisodes int
+	lengt       int
+}
+
+type ScrapedEntries struct {
+	id  int
+	cat string
 }
 
 type Filter_Data struct {
@@ -105,10 +115,15 @@ type Filter_Data struct {
 	EndDay       string
 	EndYear      string
 	ForumSpoil   string
+	ForumTitle   string
+	Slug         string
+	Genre        string
 	ForumId      int
 	ForumNum     int
+	MinLength    int
 	CompIds      []int
 	CompNums     []int
+	HoFIds       []ScrapedEntries
 	PrevStart    bool
 	PrevComp     bool
 	TV           bool
@@ -118,104 +133,43 @@ type Filter_Data struct {
 	Movie        bool
 	Music        bool
 	Unknown      bool
-	anime        []Entry
-	FilteredList []CleanEntry
-	SortedList   []CleanEntry
+	OrderedStart bool
+	OrderedEnd   bool
+	anime        []CleanEntry
 	Dupelist     []EntryParse
 	Colorlist    []ParsedEntry
-	CSortedList  []ParsedEntry
 }
 
 type EntryParse struct {
-	id    string
-	title string
+	id     string
+	title  string
+	indexa int
+	indexb int
 }
 
 type ParsedEntry struct {
-	id        string
-	title     string
-	startdate string
-	enddate   string
-	maltype   string
-	inlist    int
+	id          string
+	title       string
+	startdate   string
+	enddate     string
+	maltype     string
+	numepisodes int
+	lengt       int
+	inlist      int
 }
 
-var Postdata PostInfo
-
-func Date_filter(list []Entry, start, end string, prev_start, prev_comp bool) (filtered_list []CleanEntry) {
-	filtered_list = []CleanEntry{}
-	temp := CleanEntry{}
-	if prev_comp {
-		for i := 0; i < len(list); i++ {
-			if list[i].List_status.Finish_date <= end {
-				temp.id = strconv.Itoa(list[i].Node.Id)
-				temp.title = list[i].Node.Title
-				temp.startdate = list[i].List_status.Start_date
-				temp.enddate = list[i].List_status.Finish_date
-				temp.maltype = list[i].Node.Media
-				filtered_list = append(filtered_list, temp)
-			}
-		}
-	} else if prev_start {
-		for i := 0; i < len(list); i++ {
-			if list[i].List_status.Finish_date <= end && list[i].List_status.Finish_date >= start {
-				temp.id = strconv.Itoa(list[i].Node.Id)
-				temp.title = list[i].Node.Title
-				temp.startdate = list[i].List_status.Start_date
-				temp.enddate = list[i].List_status.Finish_date
-				temp.maltype = list[i].Node.Media
-				filtered_list = append(filtered_list, temp)
-			}
-		}
-	} else {
-		for i := 0; i < len(list); i++ {
-			if list[i].List_status.Finish_date <= end && list[i].List_status.Start_date >= start {
-				temp.id = strconv.Itoa(list[i].Node.Id)
-				temp.title = list[i].Node.Title
-				temp.startdate = list[i].List_status.Start_date
-				temp.enddate = list[i].List_status.Finish_date
-				temp.maltype = list[i].Node.Media
-				filtered_list = append(filtered_list, temp)
-			}
-		}
-	}
-	return
-}
-func Type_filter(list []CleanEntry, tv, movie, ova, ona, special, music, unknown bool) (filtered_list []CleanEntry) {
-	var media_types = []string{}
-	if tv {
-		media_types = append(media_types, "tv")
-	}
-	if movie {
-		media_types = append(media_types, "movie")
-	}
-	if ova {
-		media_types = append(media_types, "ova")
-	}
-	if ona {
-		media_types = append(media_types, "ona")
-	}
-	if special {
-		media_types = append(media_types, "special")
-	}
-	if music {
-		media_types = append(media_types, "music")
-	}
-	if unknown {
-		media_types = append(media_types, "unknown")
-	}
-
-	for i := 0; i < len(list); i++ {
-		for _, val := range media_types {
-			if val == list[i].maltype {
-				filtered_list = append(filtered_list, list[i])
-			}
-		}
-	}
-	return
+type Challenge struct {
+	title   string
+	id      string
+	slug    string
+	prevS   int
+	types   int
+	length  int
+	ordered int
+	comp    bool
 }
 
-func Turnin_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse) {
+func TurninParse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse) {
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(ForumId)+"?offset="+strconv.Itoa(ForumNum-1)+"&limit=1", nil)
 	if err != nil {
@@ -250,37 +204,20 @@ func Turnin_Parse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse
 		log.Println(err)
 	}
 	body := temp.Forum.Posts[0].Body
-	Postdata.Title = temp.Forum.Title
-	Postdata.Name = temp.Forum.Posts[0].Created_by.Name
+	data.ForumTitle = temp.Forum.Title
+	data.Username = temp.Forum.Posts[0].Created_by.Name
 	if spoiler != "" {
 		if strings.Contains(body, spoiler) {
 			_, body, _ = strings.Cut(body, spoiler+"&quot;]")
 			body, _, _ = strings.Cut(body, "[/spoiler]")
 		}
 	}
-	cutbody := strings.Split(body, "://myanimelist.net/anime")
-	for i := 1; i < len(cutbody); i++ {
-		var tempid, temptitle string
-		var tempEparse EntryParse
-		tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
-		tempid, temptitle, _ = strings.Cut(tempcut, "]")
-		if strings.Contains(tempid, ".php?id=") {
-			tempid = tempid[8:]
-		} else if strings.Contains(tempid[1:], "/") {
-			tempid, _, _ = strings.Cut(tempid[1:], "/")
-		} else {
-			tempid = tempid[1:]
-		}
-		if tempid != "genre" && tempid != "producer" && !(tempid == "199" && temptitle == "recommended") {
-			tempEparse.id = tempid
-			tempEparse.title = temptitle
-			parselist = append(parselist, tempEparse)
-		}
-	}
+	cutbody := strings.Split(body, "[url=")
+	parselist = ASplit(cutbody, parselist)
 	return
 }
 
-func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []EntryParse) {
+func CompParse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []EntryParse) {
 	client := http.Client{}
 	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/forum/topic/"+strconv.Itoa(ForumId)+"?offset="+strconv.Itoa(ForumNum-1)+"&limit=1", nil)
 	if err != nil {
@@ -354,104 +291,189 @@ func Comp_Parse(ForumId, ForumNum int, CompIds, CompNums []int) (complist []Entr
 				log.Println(err)
 			}
 			comps = append(comps, comp)
-			log.Println(CompIds[i], CompNums[i])
 		}
 
 	}
 	body := temp.Forum.Posts[0].Body
-	cutbody := strings.Split(body, "://myanimelist.net/anime")
-	for i := 1; i < len(cutbody); i++ {
-		var tempid, temptitle string
-		var tempEparse EntryParse
-		tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
-		tempid, temptitle, _ = strings.Cut(tempcut, "]")
-		if strings.Contains(tempid, ".php?id=") {
-			tempid = tempid[8:]
-		} else if strings.Contains(tempid[1:], "/") {
-			tempid, _, _ = strings.Cut(tempid[1:], "/")
-		} else {
-			tempid = tempid[1:]
-		}
-		a, _ := strconv.Atoi(tempid)
-		if tempid != "genre" && tempid != "producer" && temptitle != "Series" && a != 0 && !(a == 199 && temptitle == "recommended") {
-			tempEparse.id = tempid
-			tempEparse.title = temptitle
-			complist = append(complist, tempEparse)
-		}
-	}
+	cutbody := strings.Split(body, "[url=")
+	complist = ASplit(cutbody, complist)
 	if len(comps) > 0 {
 		for j := 0; j < len(comps); j++ {
 			if len(comps[j].Forum.Posts) > 0 {
 				body := comps[j].Forum.Posts[0].Body
-				cutbody := strings.Split(body, "://myanimelist.net/anime")
-				for i := 1; i < len(cutbody); i++ {
-					var tempid, temptitle string
-					var tempEparse EntryParse
-					tempcut, _, _ := strings.Cut(cutbody[i], "[/url]")
-					tempid, temptitle, _ = strings.Cut(tempcut, "]")
-					if strings.Contains(tempid, ".php?id=") {
-						tempid = tempid[8:]
-					} else if strings.Contains(tempid[1:], "/") {
-						tempid, _, _ = strings.Cut(tempid[1:], "/")
-					} else {
-						tempid = tempid[1:]
-					}
-					a, _ := strconv.Atoi(tempid)
-					if tempid != "genre" && tempid != "producer" && temptitle != "Series" && a != 0 && !(a == 199 && temptitle == "recommended") {
-						tempEparse.id = tempid
-						tempEparse.title = temptitle
-						complist = append(complist, tempEparse)
-					}
-				}
+				cutbody := strings.Split(body, "[url=")
+				complist = ASplit(cutbody, complist)
 			}
 		}
 	}
 	return
 }
 
-func Check_dupes(complist []EntryParse) (dupelist []EntryParse) {
+func BlogParse(spoiler string, BlogId int) (Alist []EntryParse) {
+	var Username string
+	c := colly.NewCollector()
+	c.OnRequest(func(r *colly.Request) {
+		//		fmt.Println("Visiting", r.URL)
+	})
+	c.OnResponse(func(r *colly.Response) {
+		//		fmt.Println(r.StatusCode)
+	})
+	c.OnHTML(".h1", func(e *colly.HTMLElement) {
+		a := e.DOM.Find("span")
+		Username = strings.ReplaceAll(a.First().Text(), "'s Blog", "")
+	})
+
+	c.OnHTML(".blog_detail_content_wrapper", func(e *colly.HTMLElement) {
+		l := e.DOM.Find("a")
+		l.Each(func(i int, l *goquery.Selection) {
+			var tempid, temptitle string
+			var tempEparse EntryParse
+			//			a := l.Find("a")
+			href, _ := l.Attr("href")
+			temptitle = l.Text()
+			a, tempid, temptitle := AnimeID(href, temptitle, false)
+			if a {
+				tempEparse.id = tempid
+				tempEparse.title = temptitle
+				Alist = append(Alist, tempEparse)
+			}
+		})
+
+	})
+
+	c.Visit("https://myanimelist.net/blog.php?eid=" + strconv.Itoa(BlogId))
+
+	data.Username = Username
+	data.ForumTitle = "Blog Post"
+	return
+}
+
+func BlogComps(spoiler string, BlogId []int) (Alist []EntryParse) {
+
+	c := colly.NewCollector()
+	c.OnRequest(func(r *colly.Request) {
+		//		fmt.Println("Visiting", r.URL)
+	})
+	c.OnResponse(func(r *colly.Response) {
+		//		fmt.Println(r.StatusCode)
+	})
+
+	c.OnHTML(".blog_detail_content_wrapper", func(e *colly.HTMLElement) {
+		l := e.DOM.Find("a")
+		l.Each(func(i int, l *goquery.Selection) {
+			var tempid, temptitle string
+			var tempEparse EntryParse
+			//			a := l.Find("a")
+			href, _ := l.Attr("href")
+			temptitle = l.Text()
+			log.Println(href, temptitle)
+			a, tempid, temptitle := AnimeID(href, temptitle, true)
+			if a {
+				tempEparse.id = tempid
+				tempEparse.title = temptitle
+				Alist = append(Alist, tempEparse)
+			}
+
+		})
+
+	})
+
+	for i := 0; i < len(BlogId); i++ {
+		c.Visit("https://myanimelist.net/blog.php?eid=" + strconv.Itoa(BlogId[i]))
+	}
+	return
+}
+
+func AnimeID(url, intitle string, series bool) (good bool, id, title string) {
+	good = false
+	var atype string
+	re := regexp.MustCompile("[0-9]+")
+	if strings.Contains(url, ".net") && len(url) > 30 {
+		o := strings.Index(url, ".net") + 5
+		atype = url[o : o+5]
+	} else {
+		atype = ""
+	}
+	if strings.Contains(url, "myanimelist") {
+		if atype == "anime" && !strings.Contains(url, "genre") && !strings.Contains(url, "producer") && !strings.Contains(url, "recommendations") && !strings.Contains(url[11:], "animelist") {
+			id0 := re.FindAllString(url, -1)
+			if len(id0) > 0 {
+				id = id0[0]
+				title = intitle
+				d, b := strconv.Atoi(id)
+				if series {
+					if b == nil && title != "Series" && !strings.Contains(title, "http") && !(d == 199 && title == "recommended") {
+						good = true
+					}
+				} else {
+					if b == nil && !strings.Contains(title, "http") && !(d == 199 && title == "recommended") {
+						good = true
+					}
+				}
+			} else {
+				log.Println("Invalid URL: ", url)
+			}
+		}
+	}
+	return
+}
+
+func ASplit(Alinks []string, Alist []EntryParse) []EntryParse {
+	for i := 1; i < len(Alinks); i++ {
+		var tempid, temptitle string
+		var tempEparse EntryParse
+		tempcut, _, _ := strings.Cut(Alinks[i], "[/url]")
+		tempid, temptitle, _ = strings.Cut(tempcut, "]")
+		a, tempid, temptitle := AnimeID(tempid, temptitle, true)
+		if a {
+			tempEparse.id = tempid
+			tempEparse.title = temptitle
+			Alist = append(Alist, tempEparse)
+		}
+
+	}
+	return Alist
+}
+
+func CheckDupes(complist []EntryParse) (dupelist []EntryParse) {
 	for i := 0; i < len(complist); i++ {
 		for j := i + 1; j < len(complist); j++ {
 			a, _ := strconv.Atoi(complist[i].id)
 			b, _ := strconv.Atoi(complist[j].id)
-			if a == b {
-				dupelist = append(dupelist, complist[i])
+			if a == b && a != 0 {
+				var tmp EntryParse
+				tmp.id = complist[i].id
+				tmp.title = complist[i].title
+				tmp.indexa = i + 1
+				tmp.indexb = j + 1
+				dupelist = append(dupelist, tmp)
 			}
 		}
 	}
 	return
 }
 
-func Check_forum(parselist []EntryParse, filtlist []CleanEntry, fulllist []Entry) (colorlist []ParsedEntry) {
+func CheckForum(parselist []EntryParse, fulllist []CleanEntry) (colorlist []ParsedEntry) {
 	for i := 0; i < len(parselist); i++ {
-		check, j := Contains(parselist[i], filtlist)
+		check, j := Contains(parselist[i], fulllist)
 		if check {
 			var temp ParsedEntry
-			temp.id = filtlist[j].id
-			temp.title = filtlist[j].title
-			temp.startdate = filtlist[j].startdate
-			temp.enddate = filtlist[j].enddate
-			temp.maltype = filtlist[j].maltype
+			temp.id = fulllist[j].id
+			temp.title = fulllist[j].title
+			temp.startdate = fulllist[j].startdate
+			temp.enddate = fulllist[j].enddate
+			temp.maltype = fulllist[j].maltype
+			temp.numepisodes = fulllist[j].numepisodes
+			temp.lengt = fulllist[j].lengt
 			temp.inlist = 0
 			colorlist = append(colorlist, temp)
 		} else {
-			check, j := Contains2(parselist[i], fulllist)
-			if check {
-				var temp ParsedEntry
-				temp.id = strconv.Itoa(fulllist[j].Node.Id)
-				temp.title = fulllist[j].Node.Title
-				temp.startdate = fulllist[j].List_status.Start_date
-				temp.enddate = fulllist[j].List_status.Finish_date
-				temp.maltype = fulllist[j].Node.Media
-				temp.inlist = 1
-				colorlist = append(colorlist, temp)
-			} else {
-				var temp ParsedEntry
-				temp.id = parselist[i].id
-				temp.title = parselist[i].title
-				temp.inlist = 2
-				colorlist = append(colorlist, temp)
-			}
+			var temp ParsedEntry
+			temp.id = parselist[i].id
+			temp.title = parselist[i].title
+			temp.inlist = 2
+			colorlist = append(colorlist, temp)
+
 		}
 	}
 	return
@@ -475,32 +497,19 @@ func Contains2(check EntryParse, list2 []Entry) (contain bool, index int) {
 	return false, 0
 }
 
-func Date_sort(list []CleanEntry) (sorted_list []CleanEntry) {
-	for i := 0; i < len(list); i++ {
-		sorted_list = append(sorted_list, list[i])
+func Contains3(check ParsedEntry, list2 []ScrapedEntries) (contain bool, index int) {
+	for j := 0; j < len(list2); j++ {
+		if check.id == strconv.Itoa(list2[j].id) {
+			return true, j
+		}
 	}
-	sort.SliceStable(sorted_list, func(i, j int) bool {
-		return sorted_list[i].enddate < sorted_list[j].enddate
-	})
-
-	return
+	return false, 0
 }
 
-func Date_sort2(list []ParsedEntry) (sorted_list []ParsedEntry) {
-	for i := 0; i < len(list); i++ {
-		sorted_list = append(sorted_list, list[i])
-	}
-	sort.SliceStable(sorted_list, func(i, j int) bool {
-		return sorted_list[i].enddate < sorted_list[j].enddate
-	})
-
-	return
-}
-
-func Get_list(username string) (list []Entry) {
+func Get_list(username string) (CleanList []CleanEntry) {
 
 	client := http.Client{}
-	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/users/"+username+"/animelist?status=completed&limit=1000&fields=list_status,media_type&nsfw=true", nil)
+	req, err := http.NewRequest("GET", "https://api.myanimelist.net/v2/users/"+username+"/animelist?status=completed&limit=1000&fields=list_status,media_type,num_episodes,average_episode_duration&nsfw=true", nil)
 	if err != nil {
 		log.Println(err)
 	}
@@ -576,50 +585,156 @@ func Get_list(username string) (list []Entry) {
 		next = temp2.Paging.Next
 	}
 
-	list = temp.Entry
+	list := temp.Entry
+
+	temp3 := CleanEntry{}
+	for i := 0; i < len(list); i++ {
+		temp3.id = strconv.Itoa(list[i].Node.Id)
+		temp3.title = list[i].Node.Title
+		temp3.startdate = list[i].List_status.Start_date
+		temp3.enddate = list[i].List_status.Finish_date
+		temp3.maltype = list[i].Node.Media
+		temp3.numepisodes = list[i].Node.NumEpisodes
+		temp3.lengt = list[i].Node.NumEpisodes * list[i].Node.AvgDuration
+		CleanList = append(CleanList, temp3)
+	}
+	return
+}
+
+func ScrapeHOF(username, slug string) (ids []ScrapedEntries) {
+	t := ""
+	c := colly.NewCollector()
+	c.OnRequest(func(r *colly.Request) {
+		//fmt.Println("Visiting", r.URL)
+	})
+	c.OnResponse(func(r *colly.Response) {
+		//fmt.Println(r.StatusCode)
+	})
+	c.OnHTML("#challengeItems", func(e *colly.HTMLElement) {
+
+		r := e.DOM.Find(".listItem")
+		r.Each(func(i int, r *goquery.Selection) {
+			var temp = ScrapedEntries{}
+			a, b := r.Attr("category")
+			if b {
+				//				if a != "Completed" && a != "Previously Completed" && a != "On Hold" && a != "Plan to Watch" && a != "Unwatched" {
+				temp.cat = a
+				//				}
+			}
+			if slug == "mascot" {
+				a := r.Find(".entry-comments")
+				temp.cat = a.Text()
+			}
+			e := r.Find(".seriesLink")
+			a, b = e.Attr("seriesid")
+			if b {
+				a2, _ := strconv.Atoi(a)
+				temp.id = a2
+				ids = append(ids, temp)
+			}
+		})
+
+	})
+	c.Visit("https://anime.jhiday.net/hof/challenge/" + slug + "?user=" + username + "#challengeItems" + t)
+
+	return
+}
+
+func ScrapeHOFAnime(id, genre string) (d string) {
+
+	d = "removed"
+	c := colly.NewCollector()
+	c.OnRequest(func(r *colly.Request) {
+		//fmt.Println("Visiting", r.URL)
+	})
+	c.OnResponse(func(r *colly.Response) {
+		//fmt.Println(r.StatusCode)
+	})
+	c.OnHTML(".table-bordered", func(e *colly.HTMLElement) {
+
+		r := e.DOM.Find(".history-item")
+		r.Each(func(i int, r *goquery.Selection) {
+			a := r.Find("td")
+			if strings.Contains(a.Last().Text(), "removed") {
+				b := strings.Split(a.Last().Text(), "removed")[1]
+				if strings.Contains(b, genre) {
+					d = d + " " + a.First().Text()[:10]
+				}
+			}
+		})
+		if d == "removed" {
+			d = "Not in HOF"
+		}
+	})
+	c.Visit("https://anime.jhiday.net/hof/anime/" + id)
 
 	return
 }
 
 var SecretKey string
-var CompBoxes []*tview.InputField
 var Once = true
 var FOnce = true
 var app = tview.NewApplication()
 var pages = tview.NewPages()
-var top = tview.NewForm()
-var filter = tview.NewFlex()
-var ListA = tview.NewFlex()
-var ListE = tview.NewFlex()
-var ForumA = tview.NewFlex()
-var ForumE = tview.NewFlex()
-var Fview = tview.NewFlex()
+var ForumInfo = tview.NewFlex()
 var ForumsFlex = tview.NewFlex()
 var Forums1 = tview.NewForm()
 var Forums2 = tview.NewForm()
 var ForumsButton = tview.NewForm()
 var ForumsAdd = tview.NewForm()
 var ForumsComp []*tview.Form
+var CompBoxes []*tview.InputField
+var filter = tview.NewFlex()
 var filtersA = tview.NewForm()
 var filtersB = tview.NewForm()
 var filtersZ = tview.NewForm()
 var typefilters = tview.NewForm()
-var listdisplayA = tview.NewTable().
-	SetEvaluateAllRows(true).
-	SetSelectable(true, false)
-var listdisplayE = tview.NewTable().
-	SetEvaluateAllRows(true).
-	SetSelectable(true, false)
+var miscfilters = tview.NewForm()
+var Months = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
+var genres = map[interface{}]string{
+	"action":        "Action",
+	"adventure":     "Adventure",
+	"comedy":        "Comedy",
+	"dementia":      "Avant Garde",
+	"demons":        "Mythology",
+	"drama":         "Drama",
+	"ecchi":         "Ecchi",
+	"fantasy":       "Fantasy",
+	"game":          "Game",
+	"harem":         "Harem",
+	"hentai":        "Hentai",
+	"historical":    "Historical",
+	"horror":        "Horror",
+	"josei":         "Josei",
+	"martialarts":   "Martial Arts",
+	"mecha":         "Mecha",
+	"military":      "Military",
+	"musical":       "Music",
+	"mystery":       "Mystery",
+	"parody":        "Parody",
+	"policecars":    "Detective",
+	"psychological": "Psychological",
+	"romance":       "Romance",
+	"samurai":       "Samurai",
+	"school":        "School",
+	"scifi":         "Sci-Fi",
+	"shoujoai":      "Girls Love",
+	"shounenai":     "Boys Love",
+	"sliceoflife":   "Slice of Life",
+	"space":         "Space",
+	"sportsv2":      "Sports",
+	"superpower":    "Super Power",
+	"supernatural":  "Supernatural",
+	"thriller":      "Suspense",
+	"vampire":       "Vampire",
+}
+var ForumPage = tview.NewFlex()
 var dupedisplay = tview.NewTable().
 	SetEvaluateAllRows(true).
 	SetSelectable(true, false)
-var forumdisplayA = tview.NewTable().
+var ForumDisplay = tview.NewTable().
 	SetEvaluateAllRows(true).
 	SetSelectable(true, false)
-var forumdisplayE = tview.NewTable().
-	SetEvaluateAllRows(true).
-	SetSelectable(true, false)
-var Months = []string{"Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"}
 
 var data = Filter_Data{}
 
@@ -627,46 +742,105 @@ var text = tview.NewTextView().
 	SetTextColor(tcell.ColorGreen).
 	SetText("Press (Enter) to continue")
 
-var filttext = tview.NewTextView().
-	SetTextColor(tcell.ColorGreen).
-	SetText("Filter by type (leave blank to skip)")
+func ForumEntry() *tview.Form {
+	Forums1.SetHorizontal(true)
 
-var untext = tview.NewTextView().
-	SetTextColor(tcell.ColorGreen).
-	SetTextAlign(1)
+	Forums1.AddInputField("Forum ID", "", 8, nil, func(forumId string) {
+		data.ForumId, _ = strconv.Atoi(forumId)
+	})
 
-var listinfo = tview.NewTextView().
-	SetTextColor(tcell.ColorGreen)
+	Forums1.AddInputField("Post Number", "", 4, nil, func(forumNum string) {
+		data.ForumNum, _ = strconv.Atoi(forumNum)
+	})
+	return Forums1
+}
 
 var ForumsText1 = tview.NewTextView().
 	SetTextColor(tcell.ColorGreen).
 	SetText("Following fields are optional, leave blank to skip")
 
+func ForumFilter() *tview.Form {
+	Forums2.AddInputField("Filter by Spoiler", "", 12, nil, func(forumSpoil string) {
+		data.ForumSpoil = forumSpoil
+	})
+
+	return Forums2
+}
+
 var ForumsText2 = tview.NewTextView().
 	SetTextColor(tcell.ColorGreen).
 	SetText("Posts to compare to:")
 
-func mainForm() *tview.Form {
-	top.AddInputField("Username", "", 20, nil, func(username string) {
-		data.Username = username
+func ForumButton1() *tview.Form {
+	ForumsAdd.AddButton("Add", func() {
+		data.CompIds = append(data.CompIds, 0)
+		data.CompNums = append(data.CompNums, 0)
+		ForumsComp = append(ForumsComp, tview.NewForm())
+		ForumsFlex.AddItem(ForumsComp[len(ForumsComp)-1], 0, 1, false)
+		ForumButtonN(ForumsComp[len(ForumsComp)-1])
 	})
 
-	top.AddButton("Continue", func() {
-		if data.Username != "" {
-			untext.SetText(data.Username + "'s List")
-			if Once {
-				filterstart()
-				filterend()
-				typebuttons()
-				filterbuttons()
+	return ForumsAdd
+}
+
+func ForumButtonN(temp *tview.Form) {
+	temp.SetHorizontal(true)
+
+	CompBoxes = append(CompBoxes, tview.NewInputField().
+		SetLabel("Forum ID").
+		SetFieldWidth(8))
+
+	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
+
+	CompBoxes = append(CompBoxes, tview.NewInputField().
+		SetLabel("Post Number").
+		SetFieldWidth(4))
+
+	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
+
+}
+
+var listinfo = tview.NewTextView().
+	SetTextColor(tcell.ColorGreen)
+
+var untext = tview.NewTextView().
+	SetTextColor(tcell.ColorGreen).
+	SetTextAlign(1)
+
+func ForumButtonZ() *tview.Form {
+	ForumsButton.AddButton("Continue", func() {
+		for i := 0; i < len(ForumsComp); i++ {
+			if CompBoxes[2*i].GetText() == "" {
+				data.CompIds[i] = data.ForumId
+			} else {
+				data.CompIds[i], _ = strconv.Atoi(CompBoxes[2*i].GetText())
 			}
-			Once = false
-			data.anime = Get_list(data.Username)
-			pages.SwitchToPage("Filter")
+			data.CompNums[i], _ = strconv.Atoi(CompBoxes[2*i+1].GetText())
 		}
+		var forumlist []EntryParse
+		var complist []EntryParse
+		if data.ForumNum == 0 {
+			forumlist = BlogParse(data.ForumSpoil, data.ForumId)
+			complist = BlogComps(data.ForumSpoil, append(data.CompIds, data.ForumId))
+		} else {
+			forumlist = TurninParse(data.ForumSpoil, data.ForumId, data.ForumNum)
+			complist = CompParse(data.ForumId, data.ForumNum, data.CompIds, data.CompNums)
+		}
+		data.Dupelist = CheckDupes(complist)
+		data.anime = Get_list(data.Username)
+		data.Colorlist = CheckForum(forumlist, data.anime)
+		untext.SetText(data.Username + "'s List")
+		if Once {
+			filterstart()
+			filterend()
+			typebuttons()
+			miscbuttons()
+			filterbuttons()
+		}
+		Once = false
+		pages.SwitchToPage("Filter")
 	})
-
-	return top
+	return ForumsButton
 }
 
 func filterstart() *tview.Form {
@@ -722,41 +896,10 @@ func filterend() *tview.Form {
 	})
 	return filtersB
 }
-func filterbuttons() *tview.Form {
-	filtersZ.SetHorizontal(true)
 
-	filtersZ.AddButton("Forum Parser", func() {
-		data.FilteredList = Date_filter(data.anime, data.StartYear+"-"+data.StartMonth+"-"+data.StartDay, data.EndYear+"-"+data.EndMonth+"-"+data.EndDay, data.PrevStart, data.PrevComp)
-		if data.TV || data.Movie || data.OVA || data.ONA || data.Special || data.Music || data.Unknown {
-			data.FilteredList = Type_filter(data.FilteredList, data.TV, data.Movie, data.OVA, data.ONA, data.Special, data.Music, data.Unknown)
-		}
-		data.SortedList = Date_sort(data.FilteredList)
-
-		if FOnce {
-			ForumEntry()
-			ForumFilter()
-			ForumButton1()
-			ForumButtonZ()
-		}
-		FOnce = false
-		pages.SwitchToPage("ForumView")
-	})
-
-	filtersZ.AddButton("Continue", func() {
-		data.FilteredList = Date_filter(data.anime, data.StartYear+"-"+data.StartMonth+"-"+data.StartDay, data.EndYear+"-"+data.EndMonth+"-"+data.EndDay, data.PrevStart, data.PrevComp)
-		if data.TV || data.Movie || data.OVA || data.ONA || data.Special || data.Music || data.Unknown {
-			data.FilteredList = Type_filter(data.FilteredList, data.TV, data.Movie, data.OVA, data.ONA, data.Special, data.Music, data.Unknown)
-		}
-		data.SortedList = Date_sort(data.FilteredList)
-
-		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay)
-		listdisplayA.Clear()
-		listdisplayE.Clear()
-		fillTableAlph()
-		pages.SwitchToPage("ListAlph")
-	})
-	return filtersZ
-}
+var filttext = tview.NewTextView().
+	SetTextColor(tcell.ColorGreen).
+	SetText("Filter by type (leave blank to skip)")
 
 func typebuttons() *tview.Form {
 	typefilters.SetHorizontal(true)
@@ -791,187 +934,35 @@ func typebuttons() *tview.Form {
 	return typefilters
 }
 
-func display(listdisplay tview.Table, list []CleanEntry) {
-	c := 0
-	for i := 0; i < len(list); i++ {
-		var count = tview.NewTableCell("")
-		var id = tview.NewTableCell("")
-		var titles []string
-		var mtype = tview.NewTableCell("")
-		var start = tview.NewTableCell("")
-		var end = tview.NewTableCell("")
+func miscbuttons() *tview.Form {
+	miscfilters.SetHorizontal(true)
 
-		count.SetText(strconv.Itoa(i + 1))
-		id.SetText(list[i].id)
-		if len(list[i].title) > 50 {
-			temp := tview.WordWrap(list[i].title, 50)
-			for j := 0; j < len(temp); j++ {
-				titles = append(titles, temp[j])
-			}
+	miscfilters.AddInputField("Min Length", "", 2, nil, func(lengt string) {
+		if lengt == "" {
+			data.MinLength = 0
 		} else {
-			titles = append(titles, list[i].title)
+			a, _ := strconv.Atoi(lengt)
+			data.MinLength = a * 60
 		}
-		mtype.SetText(list[i].maltype)
-		start.SetText(list[i].startdate)
-		end.SetText(list[i].enddate)
-
-		listdisplay.SetCell(i+c, 0, count)
-		listdisplay.SetCell(i+c, 1, id)
-		if len(titles) > 1 {
-			for j := 0; j < len(titles); j++ {
-				listdisplay.SetCell(i+c, 2, tview.NewTableCell(titles[j]))
-				c = c + 1
-			}
-			c = c - 1
-		} else {
-			listdisplay.SetCell(i+c, 2, tview.NewTableCell(titles[0]))
-		}
-		listdisplay.SetCell(i+c, 3, mtype)
-		listdisplay.SetCell(i+c, 4, start)
-		listdisplay.SetCell(i+c, 5, end)
-	}
-}
-
-func fillTableAlph() *tview.Table {
-	display(*listdisplayA, data.FilteredList)
-	return listdisplayA
-}
-
-func fillTableEnd() *tview.Table {
-	display(*listdisplayE, data.SortedList)
-	return listdisplayE
-}
-
-func ForumEntry() *tview.Form {
-	Forums1.SetHorizontal(true)
-
-	Forums1.AddInputField("Forum ID", "", 8, nil, func(forumId string) {
-		data.ForumId, _ = strconv.Atoi(forumId)
 	})
 
-	Forums1.AddInputField("Post Number", "", 4, nil, func(forumNum string) {
-		data.ForumNum, _ = strconv.Atoi(forumNum)
-	})
-	return Forums1
-}
-
-func ForumFilter() *tview.Form {
-	Forums2.AddInputField("Filter by Spoiler", "", 12, nil, func(forumSpoil string) {
-		data.ForumSpoil = forumSpoil
+	miscfilters.AddInputField("HoF Slug", "", 5, nil, func(slug string) {
+		data.Slug = slug
 	})
 
-	return Forums2
-}
-
-func ForumButton1() *tview.Form {
-	ForumsAdd.AddButton("Add", func() {
-		data.CompIds = append(data.CompIds, 0)
-		data.CompNums = append(data.CompNums, 0)
-		ForumsComp = append(ForumsComp, tview.NewForm())
-		ForumsFlex.AddItem(ForumsComp[len(ForumsComp)-1], 0, 1, false)
-		ForumButtonN(ForumsComp[len(ForumsComp)-1])
+	miscfilters.AddInputField("Removed Genre", "", 5, nil, func(genre string) {
+		data.Genre = genre
 	})
 
-	return ForumsAdd
-}
-
-func ForumButtonN(temp *tview.Form) {
-	temp.SetHorizontal(true)
-
-	CompBoxes = append(CompBoxes, tview.NewInputField().
-		SetLabel("Forum ID:").
-		SetFieldWidth(8))
-
-	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
-
-	CompBoxes = append(CompBoxes, tview.NewInputField().
-		SetLabel("Forum Num:").
-		SetFieldWidth(8))
-
-	temp.AddFormItem(CompBoxes[len(CompBoxes)-1])
-
-}
-func ForumButtonZ() *tview.Form {
-	ForumsButton.AddButton("Continue", func() {
-		for i := 0; i < len(ForumsComp); i++ {
-			data.CompIds[i], _ = strconv.Atoi(CompBoxes[2*i].GetText())
-			data.CompNums[i], _ = strconv.Atoi(CompBoxes[2*i+1].GetText())
-		}
-		forumlist := Turnin_Parse(data.ForumSpoil, data.ForumId, data.ForumNum)
-		complist := Comp_Parse(data.ForumId, data.ForumNum, data.CompIds, data.CompNums)
-		data.Dupelist = Check_dupes(complist)
-		data.Colorlist = Check_forum(forumlist, data.FilteredList, data.anime)
-		data.CSortedList = Date_sort2(data.Colorlist)
-		listinfo.SetText("Sort: (1) Alphabetically \t (2) End Date \t\t Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + Postdata.Name + ": " + Postdata.Title + " " + data.ForumSpoil + "\nDuplicates:")
-		forumdisplayA.Clear()
-		forumdisplayE.Clear()
-		dupedisplay.Clear()
-		displaydupes(data.Dupelist)
-		fillForumAlph()
-		pages.SwitchToPage("ForumAlph")
+	miscfilters.AddCheckbox("Ordered Start Dates", false, func(OStart bool) {
+		data.OrderedStart = OStart
 	})
-	return ForumsButton
-}
 
-func fillForumAlph() *tview.Table {
-	displayForum(*forumdisplayA, data.Colorlist)
-	return forumdisplayA
-}
+	miscfilters.AddCheckbox("Ordered End Dates", false, func(OEnd bool) {
+		data.OrderedEnd = OEnd
+	})
 
-func fillForumEnd() *tview.Table {
-	displayForum(*forumdisplayA, data.CSortedList)
-	return forumdisplayA
-}
-
-func displayForum(forumdisplay tview.Table, colorlist []ParsedEntry) {
-	c := 0
-	for i := 0; i < len(colorlist); i++ {
-		var color tcell.Color
-
-		if colorlist[i].inlist == 0 {
-			color = tcell.ColorGreen
-		} else if colorlist[i].inlist == 1 {
-			color = tcell.ColorYellow
-		} else {
-			color = tcell.ColorRed
-		}
-		var count = tview.NewTableCell("").SetTextColor(color)
-		var id = tview.NewTableCell("").SetTextColor(color)
-		var titles []string
-		var mtype = tview.NewTableCell("").SetTextColor(color)
-		var start = tview.NewTableCell("").SetTextColor(color)
-		var end = tview.NewTableCell("").SetTextColor(color)
-
-		count.SetText(strconv.Itoa(i + 1))
-		id.SetText(colorlist[i].id)
-		if len(colorlist[i].title) > 50 {
-			temp := tview.WordWrap(colorlist[i].title, 50)
-			for j := 0; j < len(temp); j++ {
-				titles = append(titles, temp[j])
-			}
-		} else {
-			titles = append(titles, colorlist[i].title)
-		}
-		mtype.SetText(colorlist[i].maltype)
-		start.SetText(colorlist[i].startdate)
-		end.SetText(colorlist[i].enddate)
-
-		forumdisplay.SetCell(i+c, 0, count)
-		forumdisplay.SetCell(i+c, 1, id)
-		if len(titles) > 1 {
-			for j := 0; j < len(titles); j++ {
-				forumdisplay.SetCell(i+c, 2, tview.NewTableCell(titles[j]).SetTextColor(color))
-				c = c + 1
-			}
-			c = c - 1
-		} else {
-			forumdisplay.SetCell(i+c, 2, tview.NewTableCell(titles[0]).SetTextColor(color))
-		}
-		forumdisplay.SetCell(i+c, 3, mtype)
-		forumdisplay.SetCell(i+c, 4, start)
-		forumdisplay.SetCell(i+c, 5, end)
-
-	}
+	return miscfilters
 }
 
 func displaydupes(dupelist []EntryParse) {
@@ -980,9 +971,13 @@ func displaydupes(dupelist []EntryParse) {
 		var count = tview.NewTableCell("")
 		var id = tview.NewTableCell("")
 		var titles []string
+		var indexa = tview.NewTableCell("")
+		var indexb = tview.NewTableCell("")
 
 		count.SetText(strconv.Itoa(i + 1))
 		id.SetText(dupelist[i].id)
+		indexa.SetText(strconv.Itoa(dupelist[i].indexb))
+		indexb.SetText(strconv.Itoa(dupelist[i].indexa))
 		if len(dupelist[i].title) > 50 {
 			temp := tview.WordWrap(dupelist[i].title, 50)
 			for j := 0; j < len(temp); j++ {
@@ -1003,12 +998,193 @@ func displaydupes(dupelist []EntryParse) {
 		} else {
 			dupedisplay.SetCell(i+c, 2, tview.NewTableCell(titles[0]))
 		}
+		dupedisplay.SetCell(i+c, 3, indexb)
+		dupedisplay.SetCell(i+c, 4, indexa)
+
 	}
+}
+
+func displayForum(colorlist []ParsedEntry) {
+	c := 0
+	prevEnd := "0000-00-00"
+
+	data.HoFIds = ScrapeHOF(data.Username, data.Slug)
+	for i := 0; i < len(colorlist); i++ {
+		var color tcell.Color
+
+		startday := data.StartYear + "-" + data.StartMonth + "-" + data.StartDay
+		endday := data.EndYear + "-" + data.EndMonth + "-" + data.EndDay
+		inlist := colorlist[i].inlist
+
+		if data.PrevComp {
+			if colorlist[i].enddate > endday {
+				inlist = 1
+			}
+		} else if data.PrevStart {
+			if colorlist[i].enddate < startday || colorlist[i].enddate > endday {
+				inlist = 1
+			}
+		} else {
+			if colorlist[i].enddate > endday || colorlist[i].startdate < startday {
+				inlist = 1
+			}
+		}
+
+		if inlist == 0 {
+			color = tcell.ColorGreen
+		} else if inlist == 1 {
+			color = tcell.ColorYellow
+		} else {
+			color = tcell.ColorRed
+		}
+		var count = tview.NewTableCell("").SetTextColor(color)
+		var id = tview.NewTableCell("").SetTextColor(color)
+		var titles []string
+		var mtype = tview.NewTableCell("").SetTextColor(color)
+		var start = tview.NewTableCell("").SetTextColor(color)
+		var end = tview.NewTableCell("").SetTextColor(color)
+		var hof = tview.NewTableCell("").SetTextColor(tcell.ColorGreen)
+		var leng = tview.NewTableCell("").SetTextColor(color)
+
+		count.SetText(strconv.Itoa(i + 1))
+		id.SetText(colorlist[i].id)
+		if len(colorlist[i].title) > 50 {
+			temp := tview.WordWrap(colorlist[i].title, 50)
+			for j := 0; j < len(temp); j++ {
+				titles = append(titles, temp[j])
+			}
+		} else {
+			titles = append(titles, colorlist[i].title)
+		}
+		if data.TV || data.Movie || data.OVA || data.ONA || data.Special || data.Music || data.Unknown {
+			var media_types = []string{}
+			var in_types = false
+			if data.TV {
+				media_types = append(media_types, "tv")
+			}
+			if data.Movie {
+				media_types = append(media_types, "movie")
+			}
+			if data.OVA {
+				media_types = append(media_types, "ova")
+			}
+			if data.ONA {
+				media_types = append(media_types, "ona")
+			}
+			if data.Special {
+				media_types = append(media_types, "special")
+			}
+			if data.Music {
+				media_types = append(media_types, "music")
+			}
+			if data.Unknown {
+				media_types = append(media_types, "unknown")
+			}
+			for _, val := range media_types {
+				if val == colorlist[i].maltype {
+					in_types = true
+				}
+			}
+			if !in_types {
+				mtype.SetTextColor(tcell.ColorRed)
+			}
+		}
+		mtype.SetText(colorlist[i].maltype)
+		start.SetText(colorlist[i].startdate)
+		end.SetText(colorlist[i].enddate)
+		if data.MinLength == 3*60 {
+			if colorlist[i].maltype != "tv" && colorlist[i].numepisodes < 10 && (colorlist[i].numepisodes < 4 || colorlist[i].lengt < 80*60) {
+				leng.SetText("Too Short ")
+				leng.SetTextColor(tcell.ColorRed)
+			}
+		} else if data.MinLength == 2*60 {
+			if colorlist[i].numepisodes < 10 && (colorlist[i].numepisodes < 4 || colorlist[i].lengt < 80*60) {
+				leng.SetText("Too Short ")
+				leng.SetTextColor(tcell.ColorRed)
+			}
+		} else if data.MinLength > 0 {
+			if colorlist[i].lengt >= data.MinLength {
+				leng.SetText("")
+			} else {
+				leng.SetText("Too Short ")
+				leng.SetTextColor(tcell.ColorRed)
+			}
+		} else {
+			leng.SetText("")
+		}
+		if data.Slug != "" {
+			a, b := Contains3(colorlist[i], data.HoFIds)
+			if !a {
+				hof.SetTextColor(tcell.ColorRed)
+				if data.Genre != "" {
+					hof.SetText(ScrapeHOFAnime(colorlist[i].id, data.Genre))
+				} else if genres[data.Slug] != "" {
+					hof.SetText(ScrapeHOFAnime(colorlist[i].id, genres[data.Slug]))
+				} else {
+					hof.SetText("Not in HoF")
+				}
+			} else {
+				e := data.HoFIds[b].cat
+				e = strings.Replace(e, "[", "", -1)
+				e = strings.Replace(e, "]", "", -1)
+				hof.SetText(e)
+			}
+		}
+
+		if data.OrderedStart {
+			if colorlist[i].startdate < prevEnd {
+				start.SetTextColor(tcell.ColorRed)
+			}
+		}
+		if data.OrderedEnd {
+			if colorlist[i].enddate < prevEnd {
+				end.SetTextColor(tcell.ColorRed)
+			}
+		}
+		prevEnd = colorlist[i].enddate
+
+		ForumDisplay.SetCell(i+c, 0, count)
+		ForumDisplay.SetCell(i+c, 1, id)
+		if len(titles) > 1 {
+			for j := 0; j < len(titles); j++ {
+				ForumDisplay.SetCell(i+c, 2, tview.NewTableCell(titles[j]).SetTextColor(color))
+				c = c + 1
+			}
+			c = c - 1
+		} else {
+			ForumDisplay.SetCell(i+c, 2, tview.NewTableCell(titles[0]).SetTextColor(color))
+		}
+		ForumDisplay.SetCell(i+c, 3, mtype)
+
+		ForumDisplay.SetCell(i+c, 4, start)
+		ForumDisplay.SetCell(i+c, 5, end)
+		ForumDisplay.SetCell(i+c, 6, hof)
+		ForumDisplay.SetCell(i+c, 7, leng)
+
+	}
+}
+
+func filterbuttons() *tview.Form {
+	filtersZ.SetHorizontal(true)
+
+	filtersZ.AddButton("Continue", func() {
+
+		listinfo.SetText("Control: (5) Back \t (6) Start\n" + data.Username + ": " + data.StartYear + "-" + data.StartMonth + "-" + data.StartDay + " " + data.EndYear + "-" + data.EndMonth + "-" + data.EndDay + "\t\t" + data.Username + ": " + data.ForumTitle + " " + data.ForumSpoil + "\nDuplicates:")
+		ForumDisplay.Clear()
+		dupedisplay.Clear()
+		displaydupes(data.Dupelist)
+		displayForum(data.Colorlist)
+		pages.SwitchToPage("ForumView")
+	})
+
+	return filtersZ
 }
 
 func main() {
 
-	file, err := os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
+	os.Remove("logs.txt")
+
+	var file, err = os.OpenFile("logs.txt", os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		log.Fatal(err)
 	}
@@ -1025,8 +1201,9 @@ func main() {
 
 	err = godotenv.Load()
 	if err != nil {
-		fmt.Println("Error loading .env file")
+		log.Println("Error loading .env file")
 	}
+
 	SecretKey = os.Getenv("SECRET_KEY")
 
 	filter.SetDirection(tview.FlexRow).
@@ -1035,27 +1212,15 @@ func main() {
 		AddItem(filtersB, 0, 1, false).
 		AddItem(filttext, 0, 1, false).
 		AddItem(typefilters, 0, 1, false).
-		AddItem(filtersZ, 0, 5, false)
+		AddItem(miscfilters, 0, 1, false).
+		AddItem(filtersZ, 0, 4, false)
 
-	ListA.SetDirection(tview.FlexRow).
-		AddItem(listinfo, 0, 1, false).
-		AddItem(listdisplayA, 0, 8, true)
-
-	ListE.SetDirection(tview.FlexRow).
-		AddItem(listinfo, 0, 1, false).
-		AddItem(listdisplayE, 0, 8, true)
-
-	ForumA.SetDirection(tview.FlexRow).
+	ForumPage.SetDirection(tview.FlexRow).
 		AddItem(listinfo, 0, 1, false).
 		AddItem(dupedisplay, 0, 2, true).
-		AddItem(forumdisplayA, 0, 5, true)
+		AddItem(ForumDisplay, 0, 5, true)
 
-	ForumE.SetDirection(tview.FlexRow).
-		AddItem(listinfo, 0, 1, false).
-		AddItem(dupedisplay, 0, 3, true).
-		AddItem(forumdisplayE, 0, 5, true)
-
-	Fview.SetDirection(tview.FlexRow).
+	ForumInfo.SetDirection(tview.FlexRow).
 		AddItem(Forums1, 0, 1, true).
 		AddItem(ForumsText1, 0, 1, false).
 		AddItem(Forums2, 0, 1, true).
@@ -1070,81 +1235,31 @@ func main() {
 		if event.Rune() == 27 {
 			app.Stop()
 		} else if event.Rune() == 13 {
-			mainForm()
-			pages.SwitchToPage("Top")
-		}
-		return event
-	})
-
-	ListA.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 50 {
-			fillTableEnd()
-			pages.SwitchToPage("ListEnd")
-		} else if event.Rune() == 53 {
-			if data.Username != "" {
-				pages.SwitchToPage("Filter")
+			if FOnce {
+				ForumEntry()
+				ForumFilter()
+				ForumButton1()
+				ForumButtonZ()
 			}
-		} else if event.Rune() == 54 {
-			pages.SwitchToPage("Top")
+			FOnce = false
+			pages.SwitchToPage("FInfo")
 		}
 		return event
 	})
 
-	ListE.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 49 {
-			fillTableAlph()
-			pages.SwitchToPage("ListAlph")
+	ForumPage.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
+		if event.Rune() == 54 {
+			pages.SwitchToPage("FInfo")
 		} else if event.Rune() == 53 {
 			pages.SwitchToPage("Filter")
-		} else if event.Rune() == 54 {
-			pages.SwitchToPage("Top")
-		}
-		return event
-	})
-
-	ListA.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 50 {
-			fillTableEnd()
-			pages.SwitchToPage("ForumEnd")
-		} else if event.Rune() == 53 {
-			if data.Username != "" {
-				pages.SwitchToPage("Filter")
-			}
-		} else if event.Rune() == 54 {
-			pages.SwitchToPage("Top")
-		}
-		return event
-	})
-
-	ListE.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 50 {
-			fillTableEnd()
-			pages.SwitchToPage("ForumAlph")
-		} else if event.Rune() == 53 {
-			if data.Username != "" {
-				pages.SwitchToPage("Filter")
-			}
-		} else if event.Rune() == 54 {
-			pages.SwitchToPage("Top")
-		}
-		return event
-	})
-
-	top.SetInputCapture(func(event *tcell.EventKey) *tcell.EventKey {
-		if event.Rune() == 27 {
-			pages.SwitchToPage("Top")
 		}
 		return event
 	})
 
 	pages.AddPage("Intro", text, true, true)
-	pages.AddPage("Top", top, true, false)
+	pages.AddPage("FInfo", ForumInfo, true, false)
 	pages.AddPage("Filter", filter, true, false)
-	pages.AddPage("ForumView", Fview, true, false)
-	pages.AddPage("ListAlph", ListA, true, false)
-	pages.AddPage("ListEnd", ListE, true, false)
-	pages.AddPage("ForumAlph", ForumA, true, false)
-	pages.AddPage("ForumEnd", ForumA, true, false)
+	pages.AddPage("ForumView", ForumPage, true, false)
 
 	if err := app.SetRoot(pages, true).EnableMouse(true).Run(); err != nil {
 		log.Println(err)
