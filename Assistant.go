@@ -208,7 +208,8 @@ func TurninParse(spoiler string, ForumId, ForumNum int) (parselist []EntryParse)
 	data.Username = temp.Forum.Posts[0].Created_by.Name
 	if spoiler != "" {
 		if strings.Contains(body, spoiler) {
-			_, body, _ = strings.Cut(body, spoiler+"&quot;]")
+			body = strings.ReplaceAll(body, "&quot;", "")
+			_, body, _ = strings.Cut(body, spoiler+"]")
 			body, _, _ = strings.Cut(body, "[/spoiler]")
 		}
 	}
